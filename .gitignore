@@ -1,0 +1,35 @@
+# ---- Private configuration (never commit) -------------------------------------
+# Real settings (bind IP, sizing) live in .env; only the template is committed.
+.env
+.env.*
+!.env.example
+# Client state, in case TEAMSPARK_HOME points inside the repo
+.teamspark/
+teamspark.env
+teamspark.ps1
+# Keys / certificates
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ---- Runtime data ---------------------------------------------------------------
+# Warehouse tables, datasets and Spark event logs (bind-mounted by docker compose)
+storage/
+logs/
+*.log
+
+# ---- Python ------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Editors / OS -------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

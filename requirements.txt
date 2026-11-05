@@ -1,0 +1,13 @@
+# TeamSpark developer requirements: the client lock + the test runner.
+#
+#   python -m pip install -r requirements.txt      (inside ~/.teamspark/venv)
+#
+# setup/requirements.txt is the single lock shared by the Docker image, the
+# setup scripts and this file - change versions there, never here.
+-r setup/requirements.txt
+
+pytest==9.2.0
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.7.0
+Pygments==2.21.0

@@ -1,0 +1,20 @@
+# TeamSpark client dependencies - shared by setup.sh and setup.ps1.
+#
+# Fully pinned lock taken from the server image's venv
+# (`uv pip freeze --python /opt/teamspark/venv/bin/python`), so clients run the
+# exact same pyspark-client / pandas / pyarrow / grpc stack as the server.
+# pyspark-client is the thin Spark Connect client: no JVM, no local Spark.
+googleapis-common-protos==1.71.0
+grpcio==1.76.0
+grpcio-status==1.76.0
+numpy==2.2.6
+pandas==2.3.3
+protobuf==6.33.6
+pyarrow==22.0.0
+pyspark-client==4.1.4
+python-dateutil==4.0.0
+pytz==2026.6
+pyyaml==6.0.3
+typing-extensions==4.16.0
+tzdata==2026.6
+zstandard==0.25.0

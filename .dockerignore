@@ -1,0 +1,4 @@
+*
+!docker/
+!scripts/
+!setup/requirements.txt

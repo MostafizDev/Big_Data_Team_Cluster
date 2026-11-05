@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!--
+  TeamSpark FAIR scheduler pools. Mounted read-only at /opt/teamspark/conf.
+
+  * Each team member's session runs in a pool named after the member
+    (the TeamSpark client library sets spark.scheduler.pool = <user>).
+    Pools not declared here are created automatically with weight=1,
+    minShare=0 and FIFO inside the pool, so active members share the
+    executor cores equally.
+  * Sessions that do not set a pool land in "default", which is FAIR inside,
+    so plain PySpark users still share fairly with each other.
+  * To prioritise someone, declare their pool here with a higher weight,
+    e.g. <pool name="alice"><weight>2</weight></pool>.
+
+  Apply changes with: docker compose restart spark-connect
+-->
+<allocations>
+  <pool name="default">
+    <schedulingMode>FAIR</schedulingMode>
+    <weight>1</weight>
+    <minShare>0</minShare>
+  </pool>
+</allocations>

@@ -1,0 +1,206 @@
+# =============================================================================
+# TeamSpark - centralized Spark Standalone cluster + Spark Connect server
+#
+#   spark-master    Standalone master (7077 internal only, UI on 127.0.0.1)
+#   spark-worker-N  Standalone workers (internal only)
+#   spark-connect   Spark Connect server = shared driver (15002 -> CONNECT_BIND_IP)
+#   spark-history   History server for finished/restarted sessions (127.0.0.1)
+#
+# All tunables live in .env (copy from .env.example).
+# =============================================================================
+name: teamspark
+
+x-spark-image: &spark-image
+  image: teamspark/spark:${TEAMSPARK_VERSION:-4.1.4-py3.12-java21}
+  # Built locally by spark-master; never pulled from a registry.
+  pull_policy: never
+  init: false # tini is already PID 1 inside the image
+  restart: unless-stopped
+  networks: [spark-net]
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-spark-env: &spark-env
+  SPARK_MASTER_HOST: spark-master
+  SPARK_MASTER_PORT: "7077"
+  SPARK_MASTER_WEBUI_PORT: "8080"
+  SPARK_NO_DAEMONIZE: "true"
+  TZ: UTC
+
+x-worker: &worker
+  <<: *spark-image
+  command: ["worker"]
+  depends_on:
+    spark-master: { condition: service_healthy }
+  healthcheck:
+    test: ["CMD", "/opt/teamspark/bin/healthcheck.sh", "worker"]
+    interval: 15s
+    timeout: 10s
+    retries: 5
+    start_period: 30s
+  deploy:
+    resources:
+      limits:
+        cpus: "${WORKER_CPU_LIMIT}"
+        memory: ${WORKER_MEM_LIMIT}
+
+x-worker-env: &worker-env
+  <<: *spark-env
+  SPARK_WORKER_CORES: ${SPARK_WORKER_CORES}
+  SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY}
+  SPARK_WORKER_WEBUI_PORT: "8081"
+  SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}
+  # Remove finished application dirs after 1 day; check hourly.
+  SPARK_WORKER_OPTS: >-
+    -Dspark.worker.cleanup.enabled=true
+    -Dspark.worker.cleanup.interval=3600
+    -Dspark.worker.cleanup.appDataTtl=86400
+
+services:
+  spark-master:
+    <<: *spark-image
+    container_name: teamspark-master
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: build
+    hostname: spark-master
+    command: ["master"]
+    environment:
+      <<: *spark-env
+      SPARK_LOCAL_HOSTNAME: spark-master
+      SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}
+      # Persist master state so workers/apps re-attach after a master restart.
+      SPARK_MASTER_OPTS: >-
+        -Dspark.deploy.recoveryMode=FILESYSTEM
+        -Dspark.deploy.recoveryDirectory=/data/recovery
+    volumes:
+      - master-recovery:/data/recovery
+      - ./conf:/opt/teamspark/conf:ro
+    ports:
+      - "127.0.0.1:${MASTER_UI_PORT}:8080" # admin UI, Mac-local only
+    healthcheck:
+      test: ["CMD", "/opt/teamspark/bin/healthcheck.sh", "master"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1g }
+
+  spark-worker-1:
+    <<: *worker
+    container_name: teamspark-worker-1
+    hostname: spark-worker-1
+    environment:
+      <<: *worker-env
+      SPARK_LOCAL_HOSTNAME: spark-worker-1
+    volumes:
+      # Driver and executors must see identical paths for warehouse/datasets.
+      - ${TEAMSPARK_STORAGE_DIR}/warehouse:/data/warehouse
+      - ${TEAMSPARK_STORAGE_DIR}/datasets:/data/datasets
+      - ./conf:/opt/teamspark/conf:ro
+      - worker-1-work:/opt/teamspark/work
+      - worker-1-scratch:/opt/teamspark/scratch
+
+  spark-worker-2:
+    <<: *worker
+    container_name: teamspark-worker-2
+    hostname: spark-worker-2
+    environment:
+      <<: *worker-env
+      SPARK_LOCAL_HOSTNAME: spark-worker-2
+    volumes:
+      # Driver and executors must see identical paths for warehouse/datasets.
+      - ${TEAMSPARK_STORAGE_DIR}/warehouse:/data/warehouse
+      - ${TEAMSPARK_STORAGE_DIR}/datasets:/data/datasets
+      - ./conf:/opt/teamspark/conf:ro
+      - worker-2-work:/opt/teamspark/work
+      - worker-2-scratch:/opt/teamspark/scratch
+
+  # To add a worker: copy the block above as spark-worker-3, rename the
+  # hostname/container/volumes, add the volumes below, and raise SPARK_CORES_MAX.
+
+  spark-connect:
+    <<: *spark-image
+    container_name: teamspark-connect
+    hostname: spark-connect
+    command: ["connect"]
+    environment:
+      <<: *spark-env
+      SPARK_LOCAL_HOSTNAME: spark-connect
+      CONNECT_APP_NAME: TeamSpark Connect
+      CONNECT_GRPC_PORT: "15002"
+      CONNECT_DRIVER_MEMORY: ${CONNECT_DRIVER_MEMORY}
+      SPARK_EXECUTOR_CORES: ${SPARK_EXECUTOR_CORES}
+      SPARK_EXECUTOR_MEMORY: ${SPARK_EXECUTOR_MEMORY}
+      SPARK_CORES_MAX: ${SPARK_CORES_MAX}
+    volumes:
+      # Driver and executors must see identical paths for warehouse/datasets.
+      - ${TEAMSPARK_STORAGE_DIR}/warehouse:/data/warehouse
+      - ${TEAMSPARK_STORAGE_DIR}/datasets:/data/datasets
+      - ./conf:/opt/teamspark/conf:ro
+      - ${TEAMSPARK_STORAGE_DIR}/events:/data/events
+      - metastore:/data/metastore
+      - connect-scratch:/opt/teamspark/scratch
+    ports:
+      # The ONLY port meant for remote users. CONNECT_BIND_IP=127.0.0.1 for
+      # local testing; set it to the Mac's Tailscale IP (100.x.y.z) for the team.
+      - "${CONNECT_BIND_IP}:${CONNECT_PORT}:15002"
+      - "127.0.0.1:${CONNECT_UI_PORT}:4040" # live driver UI, Mac-local only
+    depends_on:
+      spark-master: { condition: service_healthy }
+      spark-worker-1: { condition: service_healthy }
+      spark-worker-2: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/opt/teamspark/bin/healthcheck.sh", "connect"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "${CONNECT_CPU_LIMIT}"
+          memory: ${CONNECT_MEM_LIMIT}
+
+  spark-history:
+    <<: *spark-image
+    container_name: teamspark-history
+    hostname: spark-history
+    command: ["history"]
+    environment:
+      <<: *spark-env
+      SPARK_LOCAL_HOSTNAME: spark-history
+      SPARK_DAEMON_MEMORY: ${SPARK_DAEMON_MEMORY}
+    volumes:
+      - ${TEAMSPARK_STORAGE_DIR}/events:/data/events # rw: cleaner prunes old logs
+      - ./conf:/opt/teamspark/conf:ro
+    ports:
+      - "127.0.0.1:${HISTORY_UI_PORT}:18080" # admin UI, Mac-local only
+    healthcheck:
+      test: ["CMD", "/opt/teamspark/bin/healthcheck.sh", "history"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 768m }
+
+networks:
+  spark-net:
+    name: teamspark-net
+    driver: bridge
+
+volumes:
+  master-recovery:
+  metastore:
+  connect-scratch:
+  worker-1-work:
+  worker-1-scratch:
+  worker-2-work:
+  worker-2-scratch:
